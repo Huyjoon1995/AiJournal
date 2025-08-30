@@ -1,6 +1,5 @@
 import { 
   Button, 
-  FormControl, 
   Stack, 
   TextareaAutosize, 
   Typography, 
@@ -11,6 +10,7 @@ import {
   Alert
 } from "@mui/material";
 import { useState } from "react";
+import { useAuth0 } from "@auth0/auth0-react";
 
 interface JournalAnalysis {
     mood: string;
@@ -28,6 +28,7 @@ export const FormJournal = ({ onAnalysisComplete }: FormJournalProps) => {
     const [journal, setJournal] = useState<string>("");
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string>("");
+    const { getAccessTokenSilently } = useAuth0();
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -35,10 +36,16 @@ export const FormJournal = ({ onAnalysisComplete }: FormJournalProps) => {
         setError("");
         
         try {
+            const token = await getAccessTokenSilently({
+                authorizationParams: {
+                    audience: "http://localhost:8000",
+                }
+            });
             const response = await fetch(`${API_URL}/analyze-journal`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
                 },
                 body: JSON.stringify({
                     journal_text: journal

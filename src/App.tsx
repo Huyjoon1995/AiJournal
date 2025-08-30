@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
 import { FormJournal } from './FormJournal';
 import { Summary } from './Summary';
 import { Box, Container, CssBaseline, ThemeProvider, createTheme, Tabs, Tab, Typography, Fade } from '@mui/material';
+import { useAuth0 } from '@auth0/auth0-react';
+import TopBar from './TopBar';
 
 // Create a beautiful theme
 const theme = createTheme({
@@ -46,6 +48,14 @@ interface JournalEntry {
 function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [journalHistory, setJournalHistory] = useState<JournalEntry[]>([]);
+  const { isAuthenticated, loginWithRedirect, isLoading } = useAuth0();
+
+  useEffect(() => {
+    // If the auth state is loaded and user is not authenticated, redirect to login
+    if (!isLoading && !isAuthenticated) {
+      loginWithRedirect();
+    }
+  }, [isLoading, isAuthenticated, loginWithRedirect]);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
@@ -75,6 +85,7 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <TopBar />
       <Box
         sx={{
           minHeight: '100vh',

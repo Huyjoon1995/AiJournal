@@ -1,14 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import sessionmaker
 from db import engine
-from models.journal_analysis import JournalAnalysis as JournalAnalysisModel, Base
+from models import Base, User as UserModel, JournalAnalysis as JournalAnalysisModel
 import openai
 import os
 import json
+import requests
+import uvicorn
 from datetime import datetime
+from jose import jwt
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -22,6 +26,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+security = HTTPBearer()
+
+JWKS_URL = "https://dev-3fas6re2rfmlpqmh.us.auth0.com/.well-known/jwks.json"
+AUDIENCE = "http://localhost:8000"
+ISSUER = "https://dev-3fas6re2rfmlpqmh.us.auth0.com/"
+ALGORITHMS = ["RS256"]
 
 SessionLocal = sessionmaker(autoflush=False, bind=engine)
 
@@ -37,14 +48,94 @@ class JournalAnalysisResponse(BaseModel):
     reflection: str
     id: int = None
     created_at: datetime = None
+    
+def get_jwk(token):
+    # Get the header without verifying signature
+    unverified_header = jwt.get_unverified_header(token)
+    
+    if "kid" not in unverified_header:
+        raise HTTPException(status_code=401, detail="Invalid token header")
+
+    jwks = requests.get(JWKS_URL).json()
+    
+    for key in jwks["keys"]:
+        if key["kid"] == unverified_header["kid"]:
+            return key
+    
+    raise HTTPException(status_code=401, detail="Public key not found")
+
+def verify_token(token: str):
+    print(f"Verifying token...")
+    jwk = get_jwk(token)
+    print(f"Found JWK with kid: {jwk.get('kid', 'unknown')}")
+    
+    try:
+        # Use the JWK directly with python-jose
+        payload = jwt.decode(
+            token,
+            jwk,
+            algorithms=ALGORITHMS,
+            audience=AUDIENCE,
+            issuer=ISSUER
+        )
+        print(f"Token decoded successfully")
+        return payload
+    except jwt.ExpiredSignatureError:
+        print(f"Token expired")
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.JWTClaimsError as e:
+        print(f"Invalid claims: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid claims: {str(e)}")
+    except Exception as e:
+        print(f"Token verification failed: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Token verification failed: {str(e)}")
+    
+def get_current_user(credentials=Depends(security)):
+    token = credentials.credentials  # Bearer token
+    print(f"Received token: {token[:50]}...")
+    
+    try:
+        payload = verify_token(token)
+        print(f"Token verified successfully")
+        print(f"Token payload: {payload}")
+        
+        auth0_sub = payload["sub"]  # The unique user ID
+        print(f"Auth0 sub: {auth0_sub}")
+        
+        session = SessionLocal()
+        user = session.query(UserModel).filter_by(auth0_id=auth0_sub).first()
+        session.close()
+
+        if not user:
+            print(f"User not found in database for auth0_id: {auth0_sub}")
+            # Create user if not found
+            session = SessionLocal()
+            new_user = UserModel(
+                auth0_id=auth0_sub,
+                email=payload.get("email", ""),
+                name=payload.get("name", "")
+            )
+            session.add(new_user)
+            session.commit()
+            session.refresh(new_user)
+            session.close()
+            print(f"Created new user: {new_user.id}")
+            return new_user
+        
+        print(f"Found existing user: {user.id}")
+        return user
+        
+    except Exception as e:
+        print(f"Error in get_current_user: {str(e)}")
+        raise
 
 @app.post("/analyze-journal", response_model=JournalAnalysisResponse)
-async def analyze_journal(payload: JournalInput):
+async def analyze_journal(payload: JournalInput, current_user: UserModel = Depends(get_current_user)):
     prompt = (
         "Analyze the following journal entry and return a JSON object with:\n"
         "- mood (one word from a general category such as: happy, sad, angry, anxious, calm, stressed, hopeful, etc.)\n"
-        "- summary (2-3 sentences)\n"
-        "- reflection (a thoughtful paragraph)\n"
+        "- summary (analyze like a therapist but somehow make it's easy to understand)\n"
+        "- reflection (a thoughtful paragraph and some positive advise or encouragement depend on user's journal)\n"
         "Only return the JSON.\n\n"
         f"Journal Entry:\n{payload.journal_text}"
     )
@@ -83,6 +174,7 @@ async def analyze_journal(payload: JournalInput):
         try:
             # Create new journal analysis record
             new_journal_analysis = JournalAnalysisModel(
+                user_id=current_user.id,
                 journal_text=payload.journal_text,
                 mood=parsed.get("mood", ""),
                 summary=parsed.get("summary", ""),
@@ -130,11 +222,11 @@ async def analyze_journal(payload: JournalInput):
         )
 
 @app.get("/journal-entries")
-async def get_journal_entries():
+async def get_journal_entries(current_user: UserModel = Depends(get_current_user)):
     """Get all journal entries from the database"""
     session = SessionLocal()
     try:
-        entries = session.query(JournalAnalysisModel).order_by(JournalAnalysisModel.created_at.desc()).all()
+        entries = session.query(JournalAnalysisModel).filter(JournalAnalysisModel.user_id == current_user.id).order_by(JournalAnalysisModel.created_at.desc()).all()
         return [
             {
                 "id": entry.id,
@@ -151,4 +243,7 @@ async def get_journal_entries():
         raise HTTPException(status_code=500, detail="Failed to fetch journal entries")
     finally:
         session.close()
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
     

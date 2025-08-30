@@ -4,3 +4,6 @@ openai
 python-dotenv
 sqlalchemy
 psycopg2-binary
+python-jose
+cryptography
+requests
