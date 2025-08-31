@@ -4,8 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import inspect
 from db import engine
-from models import Base, User as UserModel, JournalAnalysis as JournalAnalysisModel
+from models import Base, User as UserModel, JournalAnalysis as JournalAnalysisModel, MonthlySummary as MonthlySummaryModel
+from collections import defaultdict, Counter
 import openai
 import os
 import json
@@ -36,8 +38,23 @@ ALGORITHMS = ["RS256"]
 
 SessionLocal = sessionmaker(autoflush=False, bind=engine)
 
-# Create tables if they don't exist
-Base.metadata.create_all(bind=engine)
+# Create tables if they don't exist (only if they don't exist)
+try:
+    # Check if tables exist before creating them
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+    
+    if not existing_tables:
+        print("No tables found. Creating database tables...")
+        Base.metadata.create_all(bind=engine)
+        print("Database tables created successfully.")
+    else:
+        print(f"Found existing tables: {existing_tables}")
+        print("Using existing database structure.")
+except Exception as e:
+    print(f"Error checking database: {e}")
+    print("Creating tables as fallback...")
+    Base.metadata.create_all(bind=engine)
 
 class JournalInput(BaseModel):
     journal_text: str
@@ -128,9 +145,45 @@ def get_current_user(credentials=Depends(security)):
     except Exception as e:
         print(f"Error in get_current_user: {str(e)}")
         raise
+    
+def generate_monthly_summary():
+    db = SessionLocal()
+    try:
+        from datetime import datetime as dt
+        start_of_month = dt(dt.now().year, dt.now().month, 1)
+        entries = db.query(JournalAnalysisModel).filter(JournalAnalysisModel.created_at >= start_of_month).all()
+        daily_data = defaultdict(lambda: Counter())
+        monthly_totals = Counter()
+        for entry in entries:
+            day = entry.created_at.strftime("%Y-%m-%d")
+            daily_data[day][entry.mood] +=1
+            monthly_totals[entry.mood] +=1
+        
+        daily_data = {day: dict(counter) for day, counter in daily_data.items()}
+        monthly_totals = dict(monthly_totals)
+        
+        month_str = start_of_month.strftime("%Y-%m")
+        existing_summary = db.query(MonthlySummaryModel).filter_by(month=month_str).first()
+        
+        if existing_summary:
+            existing_summary.daily_data = daily_data
+            existing_summary.monthly_totals = monthly_totals
+        else:
+            summary = MonthlySummaryModel(
+                month=month_str,
+                daily_data=daily_data,
+                monthly_totals=monthly_totals
+            )
+            db.add(summary)
+        db.commit()
+        print(f"[{dt.now()}] Monthly summary generated for {month_str}")
+    finally:
+        db.close()
 
 @app.post("/analyze-journal", response_model=JournalAnalysisResponse)
 async def analyze_journal(payload: JournalInput, current_user: UserModel = Depends(get_current_user)):
+    print(f"Received journal analysis request for user: {current_user.id}")
+    print(f"Journal text length: {len(payload.journal_text)}")
     prompt = (
         "Analyze the following journal entry and return a JSON object with:\n"
         "- mood (one word from a general category such as: happy, sad, angry, anxious, calm, stressed, hopeful, etc.)\n"
@@ -141,6 +194,7 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
     )
     
     try:
+        print(f"Calling OpenAI API with prompt: {prompt[:100]}...")
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",  # Using cheaper model for testing
             messages=[
@@ -151,7 +205,9 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
         )
             
         raw_output = response.choices[0].message.content
+        print(f"OpenAI API call successful")
     except openai.RateLimitError as e:
+        print(f"OpenAI rate limit error: {e}")
         # Handle quota exceeded error specifically
         return JournalAnalysisResponse(
             mood="quota_exceeded",
@@ -159,6 +215,7 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
             reflection="Your journal entry has been received. To enable AI analysis, please visit https://platform.openai.com/usage to check your account status and add billing information if needed.",
         )
     except Exception as e:
+        print(f"OpenAI API error: {e}")
         # Handle other OpenAI errors
         return JournalAnalysisResponse(
             mood="error",
@@ -167,11 +224,14 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
         )
     
     try:
+        print(f"Raw OpenAI output: {raw_output}")
         parsed = json.loads(raw_output)
+        print(f"Parsed OpenAI response: {parsed}")
         
         # Create database session
         session = SessionLocal()
         try:
+            print(f"Creating journal analysis record for user_id: {current_user.id}")
             # Create new journal analysis record
             new_journal_analysis = JournalAnalysisModel(
                 user_id=current_user.id,
@@ -181,9 +241,15 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
                 reflection=parsed.get("reflection", "")
             )
             
+            print(f"Adding journal analysis to session...")
             session.add(new_journal_analysis)
+            print(f"Committing to database...")
             session.commit()
+            print(f"Refreshing object...")
             session.refresh(new_journal_analysis)
+            
+            print(f"Successfully saved journal entry with ID: {new_journal_analysis.id}")
+            print(f"Entry details: mood={new_journal_analysis.mood}, summary_length={len(new_journal_analysis.summary)}")
             
             # Return the response with database ID and timestamp
             return JournalAnalysisResponse(
@@ -197,6 +263,8 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
         except Exception as db_error:
             session.rollback()
             print(f"Database error: {db_error}")
+            print(f"User ID: {current_user.id}")
+            print(f"Parsed data: {parsed}")
             # Return response without database ID if database fails
             return JournalAnalysisResponse(
                 mood=parsed.get("mood", ""),
@@ -207,6 +275,8 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
             session.close()
             
     except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        print(f"Raw output that failed to parse: {raw_output}")
         # Handle JSON parsing errors
         return JournalAnalysisResponse(
             mood="parsing_error",
@@ -214,6 +284,7 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
             reflection="There was an error processing the AI analysis. Please try again.",
         )
     except Exception as e:
+        print(f"Unexpected error in journal analysis: {e}")
         # Fallback response when anything fails
         return JournalAnalysisResponse(
             mood="neutral",
@@ -224,9 +295,11 @@ async def analyze_journal(payload: JournalInput, current_user: UserModel = Depen
 @app.get("/journal-entries")
 async def get_journal_entries(current_user: UserModel = Depends(get_current_user)):
     """Get all journal entries from the database"""
+    print(f"Fetching journal entries for user: {current_user.id}")
     session = SessionLocal()
     try:
         entries = session.query(JournalAnalysisModel).filter(JournalAnalysisModel.user_id == current_user.id).order_by(JournalAnalysisModel.created_at.desc()).all()
+        print(f"Found {len(entries)} journal entries for user {current_user.id}")
         return [
             {
                 "id": entry.id,
@@ -243,6 +316,29 @@ async def get_journal_entries(current_user: UserModel = Depends(get_current_user
         raise HTTPException(status_code=500, detail="Failed to fetch journal entries")
     finally:
         session.close()
+
+@app.delete("/delete_journal/<int:entry_id")
+def delete_journal(entry_id: int, current_user: UserModel = Depends(get_current_user)):
+    """Delete journal based on it id from the database"""
+    print(f"Deleting journal: {entry_id} for user: {current_user.id}")
+    session = SessionLocal()
+    try: 
+        entry = session.query(JournalAnalysisModel).filter(JournalAnalysisModel.user_id == current_user.id, JournalAnalysisModel.id == entry_id).first()
+        
+        if not entry:
+            print(f"Entry {entry_id} for user {current_user.id} not found")
+            return False
+        
+        session.delete(entry)
+        session.commit()
+        print(f"Entry {entry_id} for user {current_user.id} deleted successfully")
+        return True
+    except Exception as e:
+        session.rollback()
+        print(f"Error deleting entry: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete journal entry")
+    finally: 
+        session.close(0)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

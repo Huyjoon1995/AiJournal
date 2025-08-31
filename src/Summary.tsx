@@ -16,7 +16,6 @@ interface SummaryProps {
   summary?: string;
   reflection?: string;
   timestamp?: string;
-  onEdit?: () => void;
   onDelete?: () => void;
 }
 
@@ -43,7 +42,6 @@ export const Summary = ({
   summary = "No summary available", 
   reflection = "No reflection available",
   timestamp,
-  onEdit,
   onDelete
 }: SummaryProps) => {
   const [isHovered, setIsHovered] = useState(false);
@@ -88,22 +86,8 @@ export const Summary = ({
             </Box>
             
             {/* Action buttons */}
-            {(onEdit || onDelete) && (
+            {(onDelete) && (
               <Box sx={{ display: 'flex', gap: 1 }}>
-                {onEdit && (
-                  <Tooltip title="Edit">
-                    <IconButton 
-                      size="small" 
-                      onClick={onEdit}
-                      sx={{ 
-                        color: 'primary.main',
-                        '&:hover': { backgroundColor: 'rgba(99, 102, 241, 0.1)' }
-                      }}
-                    >
-                      ✏️
-                    </IconButton>
-                  </Tooltip>
-                )}
                 {onDelete && (
                   <Tooltip title="Delete">
                     <IconButton 

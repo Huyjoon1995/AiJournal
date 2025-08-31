@@ -5,6 +5,7 @@ import { Summary } from './Summary';
 import { Box, Container, CssBaseline, ThemeProvider, createTheme, Tabs, Tab, Typography, Fade } from '@mui/material';
 import { useAuth0 } from '@auth0/auth0-react';
 import TopBar from './TopBar';
+import { MonthlySummary } from './MonthlySummary';
 
 // Create a beautiful theme
 const theme = createTheme({
@@ -45,10 +46,11 @@ interface JournalEntry {
   journalText: string;
 }
 
+const API_URL = "http://localhost:8000";
 function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [journalHistory, setJournalHistory] = useState<JournalEntry[]>([]);
-  const { isAuthenticated, loginWithRedirect, isLoading } = useAuth0();
+  const { isAuthenticated, loginWithRedirect, isLoading, getAccessTokenSilently } = useAuth0();
 
   useEffect(() => {
     // If the auth state is loaded and user is not authenticated, redirect to login
@@ -73,14 +75,77 @@ function App() {
     setJournalHistory([newEntry, ...journalHistory]);
   };
 
-  const handleDeleteEntry = (id: string) => {
+  const handleDeleteEntry = async (id: string) => {
     setJournalHistory(journalHistory.filter(entry => entry.id !== id));
+    try {
+      const token = await getAccessTokenSilently({
+          authorizationParams: {
+            audience: API_URL,
+          },
+        });
+        const response = await fetch(`${API_URL}/delete_journal/${id}`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if(response.ok) {
+          console.log(`Successfully deleted the journal with id: ${id}`);
+        } else {
+          console.error("Failed to delete journal entry:", id, response.status, response.statusText);
+        }
+    }
+    catch (error) {
+       console.error(`Error Delete journal from server: ${error}`);
+    }
   };
 
-  const handleEditEntry = (id: string) => {
-    // For now, just remove the entry (you can implement edit functionality later)
-    handleDeleteEntry(id);
-  };
+  useEffect(() => {
+    const fetchJournal = async () => {
+      try {
+        const token = await getAccessTokenSilently({
+          authorizationParams: {
+            audience: API_URL,
+          },
+        });
+
+        const response = await fetch(`${API_URL}/journal-entries`, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Fetched journal entries:", data);
+        
+          // Convert the API data to the format expected by the frontend
+          const formattedEntries: JournalEntry[] = data.map((entry: any) => ({
+            id: entry.id.toString(),
+            mood: entry.mood,
+            summary: entry.summary,
+            reflection: entry.reflection,
+            timestamp: entry.created_at ? new Date(entry.created_at).toLocaleString() : new Date().toLocaleString(),
+            journalText: entry.journal_text
+          }));
+        
+          setJournalHistory(formattedEntries);
+        } else {
+          console.error("Failed to fetch journal entries:", response.status, response.statusText);
+        }
+      } catch (error) {
+        console.error(`Error fetching journal from server: ${error}`);
+      }
+    };
+
+    if (isAuthenticated) {
+      fetchJournal();
+    }
+  }, [getAccessTokenSilently, isAuthenticated]);
 
   return (
     <ThemeProvider theme={theme}>
@@ -165,6 +230,10 @@ function App() {
                   label={`📊 Journal History (${journalHistory.length})`} 
                   sx={{ flex: 1 }}
                 />
+                <Tab 
+                  label="📋 Journal Monthly Summary" 
+                  sx={{ flex: 1 }}
+                />
               </Tabs>
             </Box>
 
@@ -207,7 +276,6 @@ function App() {
                             summary={entry.summary}
                             reflection={entry.reflection}
                             timestamp={entry.timestamp}
-                            onEdit={() => handleEditEntry(entry.id)}
                             onDelete={() => handleDeleteEntry(entry.id)}
                           />
                         ))}
@@ -216,6 +284,14 @@ function App() {
                   </Box>
                 </Fade>
               )}
+              {activeTab === 2 && (
+                <Fade in={activeTab === 2} timeout={300}>
+                  <Box>
+                    <MonthlySummary />
+                  </Box>
+                </Fade>
+              )}
+              
             </Box>
           </Box>
         </Container>
