@@ -83,7 +83,7 @@ function App() {
             audience: API_URL,
           },
         });
-        const response = await fetch(`${API_URL}/delete_journal/${id}`, {
+        const response = await fetch(`${API_URL}/delete-journal/${id}`, {
           method: "DELETE",
           headers: {
             "Content-Type": "application/json",

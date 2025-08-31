@@ -146,12 +146,16 @@ def get_current_user(credentials=Depends(security)):
         print(f"Error in get_current_user: {str(e)}")
         raise
     
-def generate_monthly_summary():
+@app.get("/monthly-summary")
+def generate_monthly_summary(current_user: UserModel = Depends(get_current_user)):
+    now = datetime.now()
+    if now.day != 1:
+        raise HTTPException(status_code=400, detail="Monthly summary can only be generated on the 1st day of the month")
     db = SessionLocal()
     try:
         from datetime import datetime as dt
         start_of_month = dt(dt.now().year, dt.now().month, 1)
-        entries = db.query(JournalAnalysisModel).filter(JournalAnalysisModel.created_at >= start_of_month).all()
+        entries = db.query(JournalAnalysisModel).filter(JournalAnalysisModel.created_at >= start_of_month, JournalAnalysisModel.user_id == current_user.id).all()
         daily_data = defaultdict(lambda: Counter())
         monthly_totals = Counter()
         for entry in entries:
@@ -317,7 +321,7 @@ async def get_journal_entries(current_user: UserModel = Depends(get_current_user
     finally:
         session.close()
 
-@app.delete("/delete_journal/<int:entry_id")
+@app.delete("/delete-journal/{entry_id}")
 def delete_journal(entry_id: int, current_user: UserModel = Depends(get_current_user)):
     """Delete journal based on it id from the database"""
     print(f"Deleting journal: {entry_id} for user: {current_user.id}")
