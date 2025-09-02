@@ -148,39 +148,58 @@ def get_current_user(credentials=Depends(security)):
     
 @app.get("/monthly-summary")
 def generate_monthly_summary(current_user: UserModel = Depends(get_current_user)):
-    now = datetime.now()
-    if now.day != 1:
-        raise HTTPException(status_code=400, detail="Monthly summary can only be generated on the 1st day of the month")
     db = SessionLocal()
     try:
-        from datetime import datetime as dt
-        start_of_month = dt(dt.now().year, dt.now().month, 1)
-        entries = db.query(JournalAnalysisModel).filter(JournalAnalysisModel.created_at >= start_of_month, JournalAnalysisModel.user_id == current_user.id).all()
+        from datetime import datetime
+        start_of_month = datetime(datetime.now().year, datetime.now().month, 1)
+        entries = db.query(JournalAnalysisModel).filter(JournalAnalysisModel.user_id == current_user.id).all()
+        
+        print(f"Found {len(entries)} journal entries for user {current_user.id} from {start_of_month}")
+        
         daily_data = defaultdict(lambda: Counter())
         monthly_totals = Counter()
+        
         for entry in entries:
             day = entry.created_at.strftime("%Y-%m-%d")
-            daily_data[day][entry.mood] +=1
-            monthly_totals[entry.mood] +=1
+            daily_data[day][entry.mood] += 1
+            monthly_totals[entry.mood] += 1
         
         daily_data = {day: dict(counter) for day, counter in daily_data.items()}
         monthly_totals = dict(monthly_totals)
         
         month_str = start_of_month.strftime("%Y-%m")
-        existing_summary = db.query(MonthlySummaryModel).filter_by(month=month_str).first()
+        existing_summary = db.query(MonthlySummaryModel).filter_by(month=month_str, user_id=current_user.id).first()
         
         if existing_summary:
             existing_summary.daily_data = daily_data
             existing_summary.monthly_totals = monthly_totals
+            existing_summary.updated_at = datetime.now()
+            print(f"Updated existing monthly summary for {month_str}")
         else:
             summary = MonthlySummaryModel(
                 month=month_str,
+                user_id=current_user.id,
                 daily_data=daily_data,
                 monthly_totals=monthly_totals
             )
             db.add(summary)
+            print(f"Created new monthly summary for {month_str}")
+        
         db.commit()
-        print(f"[{dt.now()}] Monthly summary generated for {month_str}")
+        
+        # Return the summary data
+        return {
+            "month": month_str,
+            "daily_data": daily_data,
+            "monthly_totals": monthly_totals,
+            "total_entries": len(entries),
+            "user_id": current_user.id
+        }
+        
+    except Exception as e:
+        print(f"Error generating monthly summary: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error generating monthly summary: {str(e)}")
     finally:
         db.close()
 
@@ -342,7 +361,7 @@ def delete_journal(entry_id: int, current_user: UserModel = Depends(get_current_
         print(f"Error deleting entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete journal entry")
     finally: 
-        session.close(0)
+        session.close()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,26 +1,79 @@
-import { AppBar, Toolbar, Typography, Avatar, Box, Button } from '@mui/material';
-import { useAuth0 } from '@auth0/auth0-react';
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  Box,
+  Button,
+} from "@mui/material";
+import { useAuth0 } from "@auth0/auth0-react";
+import { UserProfileDropdown } from "./UserProfileDropdown";
+import { useLocation, useNavigate } from "react-router-dom";
 
 function TopBar() {
-  const { user, logout } = useAuth0();
+  const { user, isLoading } = useAuth0();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  if(isLoading || !user) return null;
 
   return (
     <AppBar position="static" color="transparent" elevation={0}>
-      <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>
-          AI Journal Analyzer
-        </Typography>
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          {user?.picture && <Avatar alt={user.name} src={user.picture} />}
-          {user?.name && <Typography>{user.name}</Typography>}
-          <Button
-            color="primary"
-            variant="outlined"
-            onClick={() =>  logout({ logoutParams: { returnTo: window.location.origin } })}
+      <Toolbar sx={{ display: "flex", justifyContent: "space-between" }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Typography 
+            variant="h6" 
+            sx={{ 
+              fontWeight: 700, 
+              cursor: 'pointer',
+              '&:hover': { opacity: 0.8 }
+            }}
+            onClick={() => navigate('/')}
           >
-            Logout
+            AI Journal Analyzer
+          </Typography>
+          
+          <Button
+            color="inherit"
+            onClick={() => navigate('/')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              color: location.pathname === '/' ? 'primary.main' : 'inherit',
+              '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' }
+            }}
+          >
+            Home
           </Button>
+          
+          <Button
+            color="inherit"
+            onClick={() => navigate('/about')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              color: location.pathname === '/about' ? 'primary.main' : 'inherit',
+              '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' }
+            }}
+          >
+            About
+          </Button>
+          
+          <Button
+            color="inherit"
+            onClick={() => navigate('/settings')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              color: location.pathname === '/settings' ? 'primary.main' : 'inherit',
+              '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' }
+            }}
+          >
+            Settings
+          </Button>
+        </Box>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <UserProfileDropdown />
         </Box>
       </Toolbar>
     </AppBar>

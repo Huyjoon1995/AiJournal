@@ -1,5 +1,5 @@
 import { MonthlySummaryModel } from "./MonthlySummary";
-import Highcharts from "highcharts";
+import Highcharts from "./highcharts-config";
 import HighchartsReact from "highcharts-react-official";
 
 interface MonthlyMoodLineChartProps {
